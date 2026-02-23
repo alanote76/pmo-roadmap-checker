@@ -128,7 +128,13 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { images, fileName, isPptx } = body;
+    const { images, fileName, isPptx, accessCode } = body;
+
+    // Vérifier le code d'accès
+    const validCode = process.env.ACCESS_CODE;
+    if (validCode && accessCode !== validCode) {
+      return NextResponse.json({ error: 'Code d\'accès invalide.' }, { status: 403 });
+    }
 
     if (!images || !Array.isArray(images) || images.length === 0) {
       return NextResponse.json({ error: 'Aucune donnée de slide fournie' }, { status: 400 });
