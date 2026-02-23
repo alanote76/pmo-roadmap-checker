@@ -1,11 +1,14 @@
 'use client';
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 
 interface CriteriaResult { name: string; score: number; maxScore: number; status: 'pass'|'warning'|'fail'; details: string; recommendations: string[]; }
 interface AnalysisResult { globalScore: number; maxScore: number; percentage: number; grade: string; summary: string; criteria: CriteriaResult[]; generalRecommendations: string[]; }
 interface SlideImage { data: string; mediaType: string; }
 
 export default function Home() {
+  const [accessCode, setAccessCode] = useState('');
+  const [authenticated, setAuthenticated] = useState(false);
+  const [codeError, setCodeError] = useState(false);
   const [file, setFile] = useState<File|null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState('');
@@ -13,6 +16,20 @@ export default function Home() {
   const [error, setError] = useState<string|null>(null);
   const [dragging, setDragging] = useState(false);
   const ref = useRef<HTMLInputElement>(null);
+
+  // Check if code was already entered this session
+  useEffect(() => {
+    const saved = sessionStorage.getItem('pmo_access');
+    if (saved) { setAccessCode(saved); setAuthenticated(true); }
+  }, []);
+
+  const handleCodeSubmit = () => {
+    if (accessCode.trim().length > 0) {
+      sessionStorage.setItem('pmo_access', accessCode.trim());
+      setAuthenticated(true);
+      setCodeError(false);
+    }
+  };
 
   const handleFile = useCallback(async (f: File) => {
     const ext = f.name.toLowerCase().split('.').pop();
@@ -55,6 +72,22 @@ export default function Home() {
     r.onerror = rej; r.readAsDataURL(f);
   });
 
+  const sendToApi = async (payload: Record<string, unknown>) => {
+    const r = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, accessCode: accessCode.trim() }),
+    });
+    if (r.status === 403) {
+      setAuthenticated(false);
+      sessionStorage.removeItem('pmo_access');
+      setCodeError(true);
+      throw new Error('Code d\'accès invalide. Veuillez réessayer.');
+    }
+    if (!r.ok) throw new Error((await r.json().catch(()=>({}))).error || `Erreur (${r.status})`);
+    return r.json();
+  };
+
   const analyze = async () => {
     if (!file) return;
     setLoading(true); setError(null); setResult(null);
@@ -65,18 +98,14 @@ export default function Home() {
         const imgs = await pdfToImages(await file.arrayBuffer());
         if (!imgs.length) throw new Error('Aucune slide détectée.');
         setLoadingStep(`${imgs.length} slide(s). Envoi à Claude Vision...`);
-        const r = await fetch('/api/analyze', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ images: imgs, fileName: file.name }) });
-        setLoadingStep('Analyse en cours par Claude...');
-        if (!r.ok) throw new Error((await r.json().catch(()=>({}))).error || `Erreur (${r.status})`);
-        setResult(await r.json());
+        const data = await sendToApi({ images: imgs, fileName: file.name });
+        setResult(data);
       } else {
         setLoadingStep('Préparation du fichier PowerPoint...');
         const b64 = await toB64(file);
         setLoadingStep('Envoi à Claude pour analyse...');
-        const r = await fetch('/api/analyze', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ images: [{ data: b64, mediaType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }], fileName: file.name, isPptx: true }) });
-        setLoadingStep('Analyse en cours par Claude...');
-        if (!r.ok) throw new Error((await r.json().catch(()=>({}))).error || `Erreur (${r.status})`);
-        setResult(await r.json());
+        const data = await sendToApi({ images: [{ data: b64, mediaType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }], fileName: file.name, isPptx: true });
+        setResult(data);
       }
     } catch (e: any) { setError(e.message || 'Erreur inconnue'); }
     finally { setLoading(false); setLoadingStep(''); }
@@ -89,16 +118,69 @@ export default function Home() {
   const sc = (s: string) => s==='pass'?'text-success border-success/30 bg-success/5':s==='warning'?'text-warning border-warning/30 bg-warning/5':'text-danger border-danger/30 bg-danger/5';
   const gl = (p: number) => p>=80?'Conforme':p>=60?'Acceptable':p>=40?'À améliorer':'Non conforme';
 
+  // ==================== LOGIN SCREEN ====================
+  if (!authenticated) {
+    return (
+      <main className="min-h-screen flex items-center justify-center px-4">
+        <div className="w-full max-w-sm">
+          <div className="text-center mb-8 fade-in-up">
+            <div className="w-14 h-14 mx-auto mb-4 rounded-xl bg-accent/10 border border-accent/20 flex items-center justify-center">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-accent"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
+            </div>
+            <h1 className="text-2xl font-display font-bold tracking-tight mb-1">PMO Roadmap <span className="text-accent">Checker</span></h1>
+            <p className="text-muted text-sm">Entrez le code d&apos;accès pour continuer</p>
+          </div>
+
+          <div className="gradient-border p-6 fade-in-up fade-in-up-delay-1">
+            <div className="mb-4">
+              <label className="block text-xs text-muted mb-2 uppercase tracking-wider font-medium">Code d&apos;accès</label>
+              <input
+                type="password"
+                value={accessCode}
+                onChange={e => { setAccessCode(e.target.value); setCodeError(false); }}
+                onKeyDown={e => e.key === 'Enter' && handleCodeSubmit()}
+                placeholder="••••••••"
+                className="w-full px-4 py-3 bg-navy/80 border border-white/10 rounded-xl text-white placeholder-muted/40 focus:outline-none focus:border-accent/50 focus:ring-1 focus:ring-accent/20 transition-all font-mono text-center text-lg tracking-widest"
+                autoFocus
+              />
+            </div>
+            {codeError && (
+              <p className="text-danger text-xs mb-3 text-center">Code invalide. Réessayez.</p>
+            )}
+            <button
+              onClick={handleCodeSubmit}
+              className="w-full px-6 py-3 bg-accent hover:bg-accent/90 text-navy font-semibold rounded-xl transition-all flex items-center justify-center gap-2"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+              Accéder
+            </button>
+          </div>
+
+          <p className="text-center text-muted/40 text-xs mt-6">Accès réservé à l&apos;équipe PMO</p>
+        </div>
+      </main>
+    );
+  }
+
+  // ==================== MAIN APP ====================
   return (
     <main className="min-h-screen px-4 py-8 md:px-8 lg:px-16 max-w-6xl mx-auto">
       <header className="mb-12 fade-in-up">
-        <div className="flex items-center gap-3 mb-2">
-          <div className="w-10 h-10 rounded-lg bg-accent/10 border border-accent/20 flex items-center justify-center">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-accent"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-10 h-10 rounded-lg bg-accent/10 border border-accent/20 flex items-center justify-center">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-accent"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
+              </div>
+              <h1 className="text-2xl md:text-3xl font-display font-bold tracking-tight">PMO Roadmap <span className="text-accent">Checker</span></h1>
+            </div>
+            <p className="text-muted text-sm md:text-base ml-[52px]">Vérifiez la conformité de vos feuilles de route au gabarit PMO</p>
           </div>
-          <h1 className="text-2xl md:text-3xl font-display font-bold tracking-tight">PMO Roadmap <span className="text-accent">Checker</span></h1>
+          <button onClick={() => { setAuthenticated(false); sessionStorage.removeItem('pmo_access'); setAccessCode(''); }} className="text-muted/50 hover:text-muted text-xs flex items-center gap-1 transition-colors" title="Déconnexion">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+            Quitter
+          </button>
         </div>
-        <p className="text-muted text-sm md:text-base ml-[52px]">Vérifiez la conformité de vos feuilles de route au gabarit PMO</p>
       </header>
 
       {!result && (
