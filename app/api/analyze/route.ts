@@ -136,21 +136,22 @@ export async function POST(request: NextRequest) {
 
     const client = new Anthropic({ apiKey });
 
-    // Build content array
-    const content: Anthropic.MessageCreateParams['messages'][0]['content'] = [];
+    // Build content array - using 'any' to support document type not yet in SDK types
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const content: any[] = [];
 
     if (isPptx) {
       // PPTX: send as document for Claude to parse
       content.push({
-        type: 'document' as const,
+        type: 'document',
         source: {
-          type: 'base64' as const,
-          media_type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' as const,
+          type: 'base64',
+          media_type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
           data: images[0].data,
         },
       });
       content.push({
-        type: 'text' as const,
+        type: 'text',
         text: `Voici une feuille de route PMO au format PowerPoint (fichier: "${fileName}"). Analyse le contenu en détail — les textes, la structure, les éléments présents ou absents.
 
 Note: Comme c'est un fichier PowerPoint brut, concentre-toi sur le CONTENU (textes, phases, dates, catégories présentes) plutôt que sur la présentation visuelle détaillée. Pour une analyse visuelle complète, l'utilisateur devrait uploader un PDF.
@@ -161,16 +162,16 @@ ${ANALYSIS_PROMPT}`,
       // PDF images: send each slide as image for vision analysis
       for (let i = 0; i < images.length; i++) {
         content.push({
-          type: 'image' as const,
+          type: 'image',
           source: {
-            type: 'base64' as const,
-            media_type: images[i].mediaType as 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif',
+            type: 'base64',
+            media_type: images[i].mediaType,
             data: images[i].data,
           },
         });
       }
       content.push({
-        type: 'text' as const,
+        type: 'text',
         text: `Voici ${images.length} slide(s) d'une feuille de route PMO (fichier: "${fileName}"). Analyse visuellement CHAQUE slide en détail — regarde la mise en page, les couleurs, les pictos, les formes, les textes, les barres, les jalons.
 
 ${ANALYSIS_PROMPT}`,
